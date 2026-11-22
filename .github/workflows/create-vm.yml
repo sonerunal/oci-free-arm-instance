@@ -1,0 +1,105 @@
+
+name: Oracle Always Free ARM
+
+on:
+  workflow_dispatch:
+  schedule:
+    - cron: "7,27,47 * * * *"
+
+permissions:
+  contents: read
+
+concurrency:
+  group: oracle-arm-provision
+  cancel-in-progress: false
+
+jobs:
+  create-vm:
+    runs-on: ubuntu-latest
+    timeout-minutes: 12
+
+    env:
+      OCI_CLI_REGION: eu-turin-1
+      OCI_CLI_USER: ${{ secrets.OCI_CLI_USER }}
+      OCI_CLI_TENANCY: ${{ secrets.OCI_CLI_TENANCY }}
+      OCI_CLI_FINGERPRINT: ${{ secrets.OCI_CLI_FINGERPRINT }}
+      OCI_CLI_KEY_CONTENT: ${{ secrets.OCI_CLI_KEY_CONTENT }}
+      COMPARTMENT_ID: ${{ secrets.OCI_COMPARTMENT_ID }}
+      SUBNET_ID: ${{ secrets.OCI_SUBNET_ID }}
+      AD_NAME: ${{ secrets.AD_NAME }}
+      IMAGE_ID: ${{ secrets.IMAGE_ID }}
+      SSH_PUBLIC_KEY: ${{ secrets.SSH_PUBLIC_KEY }}
+
+    steps:
+      - name: Install OCI CLI
+        run: python3 -m pip install --user oci-cli
+
+      - name: Configure Oracle credentials
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p ~/.oci
+          printf '%s\n' "$OCI_CLI_KEY_CONTENT" > ~/.oci/key.pem
+          chmod 600 ~/.oci/key.pem
+          {
+            echo "[DEFAULT]"
+            echo "user=$OCI_CLI_USER"
+            echo "tenancy=$OCI_CLI_TENANCY"
+            echo "fingerprint=$OCI_CLI_FINGERPRINT"
+            echo "region=$OCI_CLI_REGION"
+            echo "key_file=$HOME/.oci/key.pem"
+          } > ~/.oci/config
+          chmod 600 ~/.oci/config
+          printf '%s\n' "$SSH_PUBLIC_KEY" > /tmp/oracle_ssh.pub
+
+      - name: Check and create instance
+        shell: bash
+        run: |
+          set -euo pipefail
+          export PATH="$HOME/.local/bin:$PATH"
+
+          oci compute instance list \
+            --compartment-id "$COMPARTMENT_ID" \
+            --all --output json > /tmp/instances.json
+
+          if python3 -c '
+          import json
+          import sys
+          data = json.load(open("/tmp/instances.json"))["data"]
+          exists = any(
+              vm["display-name"] == "turin-arm-vm"
+              and vm["lifecycle-state"] != "TERMINATED"
+              for vm in data
+          )
+          sys.exit(0 if exists else 1)
+          '; then
+            echo "Instance already exists. Skipping."
+            exit 0
+          fi
+
+          echo "No instance found. Trying to create..."
+
+          if oci compute instance launch \
+            --compartment-id "$COMPARTMENT_ID" \
+            --availability-domain "$AD_NAME" \
+            --shape "VM.Standard.A1.Flex" \
+            --shape-config '{"ocpus":2,"memoryInGBs":12}' \
+            --subnet-id "$SUBNET_ID" \
+            --image-id "$IMAGE_ID" \
+            --ssh-authorized-keys-file /tmp/oracle_ssh.pub \
+            --assign-public-ip true \
+            --boot-volume-size-in-gbs 50 \
+            --display-name "turin-arm-vm" \
+            --query 'data.{id:id,state:"lifecycle-state"}' \
+            > /tmp/create-result.json 2>/tmp/create-error.log; then
+            echo "SUCCESS: VM creation request accepted."
+            cat /tmp/create-result.json
+          elif grep -Eiq \
+            'Out of host capacity|OutOfHostCapacity' \
+            /tmp/create-error.log; then
+            echo "No capacity. Will retry on next schedule."
+          else
+            echo "Unexpected Oracle API error:"
+            cat /tmp/create-error.log
+            exit 1
+          fi

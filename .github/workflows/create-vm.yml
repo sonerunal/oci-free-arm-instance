@@ -50,7 +50,11 @@ jobs:
             echo "key_file=$HOME/.oci/key.pem"
           } > ~/.oci/config
           chmod 600 ~/.oci/config
-          printf '%s\n' "$SSH_PUBLIC_KEY" > /tmp/oracle_ssh.pub
+          printf '%s\n' "$SSH_PUBLIC_KEY" | tr -d '\r' > /tmp/oracle_ssh.pub
+          ssh-keygen -l -f /tmp/oracle_ssh.pub >/dev/null || {
+            echo "ERROR: Invalid SSH public key"
+            exit 1
+          }
 
       - name: Check and create instance
         shell: bash

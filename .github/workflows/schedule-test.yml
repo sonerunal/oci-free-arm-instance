@@ -1,0 +1,20 @@
+
+name: Schedule Test
+
+on:
+  workflow_dispatch:
+  schedule:
+    - cron: "*/5 * * * *"
+
+permissions:
+  contents: read
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check scheduler
+        run: |
+          echo "GitHub Actions scheduler works!"
+          echo "Event: ${{ github.event_name }}"
+          date -u

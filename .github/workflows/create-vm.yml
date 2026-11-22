@@ -83,6 +83,7 @@ jobs:
           echo "Configuration validated."
 
       - name: Check and create instance
+        id: create_vm
         shell: bash
         run: |
           set -euo pipefail
@@ -145,8 +146,7 @@ jobs:
               if existing:
                   print("INSTANCE_EXISTS")
                   print(
-                      "An active or non-terminated "
-                      "A1 Flex instance already exists."
+                      "An A1 Flex instance already exists."
                   )
                   print("Skipping creation for safety.")
                   sys.exit(0)
@@ -195,10 +195,17 @@ jobs:
 
               print("SUCCESS: VM creation accepted.")
               print("Instance ID:", result.data.id)
-              print(
-                  "State:",
-                  result.data.lifecycle_state
-              )
+              print("State:", result.data.lifecycle_state)
+
+              # Trigger Gmail notification only on success.
+              with open(
+                  os.environ["GITHUB_OUTPUT"],
+                  "a",
+                  encoding="utf-8"
+              ) as output:
+                  output.write("vm_created=true\n")
+
+              print("GMAIL_NOTIFICATION_REQUESTED")
 
           except ServiceError as error:
               message = str(error.message or "")
@@ -230,8 +237,63 @@ jobs:
               sys.exit(1)
           PY
 
+      - name: Send Gmail notification
+        if: steps.create_vm.outputs.vm_created == 'true'
+        shell: bash
+        env:
+          GMAIL_USERNAME: ${{ secrets.GMAIL_USERNAME }}
+          GMAIL_APP_PASSWORD: ${{ secrets.GMAIL_APP_PASSWORD }}
+        run: |
+          set -euo pipefail
+
+          python - <<'PY'
+          import os
+          import smtplib
+          from email.message import EmailMessage
+
+          sender = os.environ["GMAIL_USERNAME"]
+          password = os.environ["GMAIL_APP_PASSWORD"]
+
+          if not sender or not password:
+              raise RuntimeError(
+                  "Missing Gmail credentials."
+              )
+
+          message = EmailMessage()
+          message["From"] = sender
+          message["To"] = sender
+          message["Subject"] = (
+              "Oracle Cloud - ARM VM Olusturuldu!"
+          )
+
+          message.set_content(
+              "Oracle Cloud VM olusturma istegi "
+              "basariyla kabul edildi!\n\n"
+              "Bolge: Italy North (Turin)\n"
+              "Sunucu: turin-arm-vm\n"
+              "Shape: VM.Standard.A1.Flex\n"
+              "CPU: 2 OCPU\n"
+              "RAM: 12 GB\n"
+              "Disk: 50 GB\n\n"
+              "Sunucunun RUNNING durumuna "
+              "gectigini Oracle Console "
+              "uzerinden dogrulayin.\n\n"
+              "https://cloud.oracle.com/"
+          )
+
+          with smtplib.SMTP_SSL(
+              "smtp.gmail.com",
+              465,
+              timeout=30
+          ) as smtp:
+              smtp.login(sender, password)
+              smtp.send_message(message)
+
+          print("GMAIL_NOTIFICATION_SENT")
+          PY
+
       - name: Show final status
         if: success()
         run: |
           echo "Oracle ARM workflow completed."
-          echo "Check the instance step for the result."
+          echo "Check the instance log for the result."

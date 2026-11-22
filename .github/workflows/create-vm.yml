@@ -3,8 +3,6 @@ name: Oracle Always Free ARM
 
 on:
   workflow_dispatch:
-  schedule:
-    - cron: "13,33,53 * * * *"
 
 permissions:
   contents: read
